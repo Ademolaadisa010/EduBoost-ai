@@ -129,11 +129,11 @@ export default function EduBoostPage() {
 
             {/* Actions */}
             <div className="flex items-center gap-3">
-              <a href="#" className="hidden sm:block text-slate-600 hover:text-slate-900 font-semibold text-sm">
+              <a href="/Login" className="hidden sm:block text-slate-600 hover:text-slate-900 font-semibold text-sm">
                 Log in
               </a>
               <a
-                href="#"
+                href="/demo"
                 className="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition-colors shadow-md shadow-orange-200"
               >
                 Try the App
@@ -176,14 +176,14 @@ export default function EduBoostPage() {
 
                 <div className="flex flex-col sm:flex-row gap-4">
                   <a
-                    href="#"
+                    href="/Register"
                     className="inline-flex justify-center items-center gap-2.5 bg-orange-500 hover:bg-orange-600 text-white px-8 py-4 rounded-2xl font-bold text-base transition-all shadow-lg shadow-orange-200 hover:shadow-xl hover:-translate-y-0.5"
                   >
                     Get Started Free
                     <ArrowRight className="w-5 h-5" />
                   </a>
                   <a
-                    href="#"
+                    href="/demo"
                     className="inline-flex justify-center items-center gap-2.5 bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200 px-8 py-4 rounded-2xl font-bold text-base transition-all"
                   >
                     <PlayCircle className="w-5 h-5 text-teal-500" />
@@ -457,7 +457,7 @@ export default function EduBoostPage() {
                     your toughest subjects.
                   </p>
                   <a
-                    href="#"
+                    href="/Register"
                     className="inline-flex items-center gap-2.5 bg-white text-violet-700 px-7 py-3.5 rounded-2xl font-bold text-sm transition-all hover:-translate-y-0.5 hover:shadow-xl shadow-lg"
                   >
                     Browse Mentors
@@ -523,13 +523,13 @@ export default function EduBoostPage() {
             </p>
             <div className="flex flex-col sm:flex-row justify-center gap-4">
               <a
-                href="#"
+                href="/Register"
                 className="bg-orange-500 hover:bg-orange-600 text-white px-10 py-4 rounded-2xl font-black text-lg transition-all shadow-xl shadow-orange-900/30 hover:-translate-y-0.5"
               >
                 Sign Up for Free
               </a>
               <a
-                href="#"
+                href="demo"
                 className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-10 py-4 rounded-2xl font-black text-lg transition-colors"
               >
                 Try the App
