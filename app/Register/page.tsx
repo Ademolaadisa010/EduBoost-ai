@@ -3,13 +3,19 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Sparkles, Eye, EyeOff, BookOpen, BrainCircuit, Users, ArrowRight } from "lucide-react";
+import toast, { Toaster } from "react-hot-toast";
+import {
+  Sparkles, Eye, EyeOff, BookOpen,
+  BrainCircuit, Users, ArrowRight,
+} from "lucide-react";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 
 type Role = "student" | "mentor";
 
 export default function RegisterPage() {
   const router = useRouter();
-
   const [role, setRole] = useState<Role>("student");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -20,54 +26,117 @@ export default function RegisterPage() {
     password: "",
     confirmPassword: "",
   });
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
+  // ── Email / Password registration ─────────────────────────────────────────
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
-    setLoading(true);
 
+    // Client-side validation with toast feedback
     if (!formData.fullName.trim() || !formData.email.trim() || !formData.phone.trim()) {
-      setError("Please fill in all fields");
-      setLoading(false);
+      toast.error("Please fill in all fields.");
       return;
     }
-
     if (formData.password.length < 6) {
-      setError("Password must be at least 6 characters long");
-      setLoading(false);
+      toast.error("Password must be at least 6 characters.");
+      return;
+    }
+    if (formData.password !== formData.confirmPassword) {
+      toast.error("Passwords do not match.");
       return;
     }
 
-    if (formData.password !== formData.confirmPassword) {
-      setError("Passwords do not match");
-      setLoading(false);
-      return;
-    }
+    setLoading(true);
+    const toastId = toast.loading("Creating your account…");
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1400));
-      router.push(role === "mentor" ? "/mentor/onboarding" : "/student/dashboard");
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName: formData.fullName,
+          email: formData.email,
+          phone: formData.phone,
+          password: formData.password,
+          role,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        toast.error(data.error ?? "Something went wrong.", { id: toastId });
+        return;
+      }
+
+      toast.success(
+        "Account created! Check your email to verify your account. 🎉",
+        { id: toastId, duration: 5000 }
+      );
+
+      // Short delay so the user reads the toast, then redirect
+      setTimeout(() => {
+        router.push(role === "mentor" ? "/mentor/onboarding" : "/student/dashboard");
+      }, 2000);
     } catch {
-      setError("Something went wrong. Please try again.");
+      toast.error("Network error. Please check your connection.", { id: toastId });
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Google sign-up ────────────────────────────────────────────────────────
   const handleGoogleSignIn = async () => {
-    setError("");
     setLoading(true);
+    const toastId = toast.loading("Connecting to Google…");
+
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      router.push(role === "mentor" ? "/mentor/onboarding" : "/student/dashboard");
-    } catch {
-      setError("Google sign up failed. Please try again.");
+      const provider = new GoogleAuthProvider();
+      const credential = await signInWithPopup(auth, provider);
+      const user = credential.user;
+
+      // Only write to Firestore if this is a brand-new user
+      const userRef = doc(db, "users", user.uid);
+      const existing = await getDoc(userRef);
+
+      if (!existing.exists()) {
+        await setDoc(userRef, {
+          uid: user.uid,
+          fullName: user.displayName ?? "",
+          email: user.email ?? "",
+          phone: user.phoneNumber ?? "",
+          role,
+          emailVerified: user.emailVerified,
+          createdAt: serverTimestamp(),
+        });
+
+        // Send welcome email via your API (fire-and-forget)
+        fetch("/api/auth/welcome-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: user.email,
+            fullName: user.displayName,
+            role,
+          }),
+        }).catch(() => null);
+      }
+
+      toast.success("Signed in with Google! Welcome 🎉", { id: toastId });
+      setTimeout(() => {
+        router.push(role === "mentor" ? "/mentor/onboarding" : "/Login");
+      }, 1200);
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      if (code === "auth/popup-closed-by-user") {
+        toast.error("Sign-in cancelled.", { id: toastId });
+      } else {
+        toast.error("Google sign-in failed. Please try again.", { id: toastId });
+      }
     } finally {
       setLoading(false);
     }
@@ -75,19 +144,36 @@ export default function RegisterPage() {
 
   return (
     <main className="min-h-screen bg-amber-50 font-body">
-      {/* ── full-page grid ───────────────────────────────────────── */}
+      {/* ── Toast provider ─────────────────────────────────────────────────── */}
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          style: {
+            borderRadius: "14px",
+            fontWeight: 600,
+            fontSize: "14px",
+            padding: "14px 18px",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.10)",
+          },
+          success: {
+            iconTheme: { primary: "#f97316", secondary: "#fff" },
+          },
+          error: {
+            iconTheme: { primary: "#ef4444", secondary: "#fff" },
+          },
+        }}
+      />
+
+      {/* ── full-page grid ──────────────────────────────────────────────────── */}
       <div className="min-h-screen lg:grid lg:grid-cols-2">
 
-        {/* ── LEFT BRAND PANEL ─────────────────────────────────── */}
+        {/* ── LEFT BRAND PANEL ───────────────────────────────────────────── */}
         <div className="relative hidden lg:flex flex-col justify-between overflow-hidden bg-slate-900 p-12 xl:p-16">
-          {/* background blobs */}
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -top-32 -left-32 w-[500px] h-[500px] rounded-full bg-orange-500 opacity-10 blur-3xl" />
             <div className="absolute bottom-0 right-0 w-[400px] h-[400px] rounded-full bg-teal-500 opacity-10 blur-3xl" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] rounded-full bg-violet-500 opacity-8 blur-3xl" />
           </div>
 
-          {/* logo */}
           <div className="relative z-10 flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-orange-500 flex items-center justify-center text-white shadow-lg shadow-orange-900/40">
               <Sparkles className="w-5 h-5" />
@@ -98,7 +184,6 @@ export default function RegisterPage() {
             </span>
           </div>
 
-          {/* headline */}
           <div className="relative z-10 my-auto">
             <p className="text-orange-400 font-bold uppercase tracking-widest text-xs mb-4">
               Academic AI Platform
@@ -108,10 +193,9 @@ export default function RegisterPage() {
               <em className="not-italic text-orange-400">smart learning</em>
             </h1>
             <p className="text-slate-300 text-lg leading-relaxed font-medium max-w-md">
-              AI-powered study tools, peer collaboration, and expert mentorship — all in one platform built for exam success.
+              AI-powered study tools, peer collaboration, and expert mentorship — all in one platform.
             </p>
 
-            {/* feature pills */}
             <div className="mt-10 space-y-3">
               {[
                 { icon: <BookOpen className="w-4 h-4" />, color: "bg-orange-500/20 text-orange-300", text: "AI summaries, quizzes & explanations from your notes" },
@@ -128,7 +212,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* bottom stat */}
           <div className="relative z-10 flex items-center gap-4 rounded-2xl bg-white/5 border border-white/8 px-5 py-4">
             <div className="bg-teal-500/20 p-2.5 rounded-xl text-teal-400">
               <BrainCircuit className="w-5 h-5" />
@@ -140,7 +223,7 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {/* ── RIGHT FORM PANEL ─────────────────────────────────── */}
+        {/* ── RIGHT FORM PANEL ───────────────────────────────────────────── */}
         <div className="flex items-center justify-center px-5 py-10 sm:px-8 md:px-10 lg:px-14 bg-amber-50">
           <div className="w-full max-w-md">
 
@@ -155,7 +238,6 @@ export default function RegisterPage() {
               </span>
             </div>
 
-            {/* heading */}
             <p className="text-orange-500 font-bold uppercase tracking-widest text-xs mb-2">Get started</p>
             <h2 className="font-display font-black text-slate-900 text-3xl xl:text-4xl leading-tight mb-2">
               Create your account
@@ -164,13 +246,14 @@ export default function RegisterPage() {
               Join thousands of students and mentors transforming how they learn.
             </p>
 
-            {/* ── role toggle ── */}
+            {/* Role toggle */}
             <div className="grid grid-cols-2 gap-3 mb-6">
               {(["student", "mentor"] as Role[]).map((r) => (
                 <button
                   key={r}
                   type="button"
                   onClick={() => setRole(r)}
+                  disabled={loading}
                   className={`rounded-2xl border-2 py-3 text-sm font-bold transition-all ${
                     role === r
                       ? r === "student"
@@ -184,82 +267,51 @@ export default function RegisterPage() {
               ))}
             </div>
 
-            {/* ── error ── */}
-            {error && (
-              <div className="mb-5 rounded-2xl border-2 border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
-                {error}
-              </div>
-            )}
-
-            {/* ── form ── */}
+            {/* Form */}
             <form onSubmit={handleRegister} className="space-y-4">
-
-              {/* Full Name */}
               <div>
-                <label htmlFor="fullName" className="mb-1.5 block text-sm font-bold text-slate-700">
-                  Full Name
-                </label>
+                <label htmlFor="fullName" className="mb-1.5 block text-sm font-bold text-slate-700">Full Name</label>
                 <input
-                  id="fullName"
-                  name="fullName"
-                  type="text"
-                  required
-                  value={formData.fullName}
-                  onChange={handleInputChange}
+                  id="fullName" name="fullName" type="text" required
+                  value={formData.fullName} onChange={handleInputChange}
                   placeholder="Amara Tunde"
-                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                  disabled={loading}
+                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:opacity-60"
                 />
               </div>
 
-              {/* Email */}
               <div>
-                <label htmlFor="email" className="mb-1.5 block text-sm font-bold text-slate-700">
-                  Email Address
-                </label>
+                <label htmlFor="email" className="mb-1.5 block text-sm font-bold text-slate-700">Email Address</label>
                 <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  required
-                  value={formData.email}
-                  onChange={handleInputChange}
+                  id="email" name="email" type="email" required
+                  value={formData.email} onChange={handleInputChange}
                   placeholder="you@example.com"
-                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                  disabled={loading}
+                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:opacity-60"
                 />
               </div>
 
-              {/* Phone */}
               <div>
-                <label htmlFor="phone" className="mb-1.5 block text-sm font-bold text-slate-700">
-                  Phone Number
-                </label>
+                <label htmlFor="phone" className="mb-1.5 block text-sm font-bold text-slate-700">Phone Number</label>
                 <input
-                  id="phone"
-                  name="phone"
-                  type="tel"
-                  required
-                  value={formData.phone}
-                  onChange={handleInputChange}
+                  id="phone" name="phone" type="tel" required
+                  value={formData.phone} onChange={handleInputChange}
                   placeholder="+234 801 234 5678"
-                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                  disabled={loading}
+                  className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:opacity-60"
                 />
               </div>
 
-              {/* Password */}
               <div>
-                <label htmlFor="password" className="mb-1.5 block text-sm font-bold text-slate-700">
-                  Password
-                </label>
+                <label htmlFor="password" className="mb-1.5 block text-sm font-bold text-slate-700">Password</label>
                 <div className="relative">
                   <input
-                    id="password"
-                    name="password"
-                    type={showPassword ? "text" : "password"}
-                    required
-                    value={formData.password}
-                    onChange={handleInputChange}
+                    id="password" name="password"
+                    type={showPassword ? "text" : "password"} required
+                    value={formData.password} onChange={handleInputChange}
                     placeholder="Create a strong password"
-                    className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 pr-14 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                    disabled={loading}
+                    className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 pr-14 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:opacity-60"
                   />
                   <button
                     type="button"
@@ -271,21 +323,16 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Confirm Password */}
               <div>
-                <label htmlFor="confirmPassword" className="mb-1.5 block text-sm font-bold text-slate-700">
-                  Confirm Password
-                </label>
+                <label htmlFor="confirmPassword" className="mb-1.5 block text-sm font-bold text-slate-700">Confirm Password</label>
                 <div className="relative">
                   <input
-                    id="confirmPassword"
-                    name="confirmPassword"
-                    type={showConfirmPassword ? "text" : "password"}
-                    required
-                    value={formData.confirmPassword}
-                    onChange={handleInputChange}
+                    id="confirmPassword" name="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"} required
+                    value={formData.confirmPassword} onChange={handleInputChange}
                     placeholder="Confirm your password"
-                    className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 pr-14 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100"
+                    disabled={loading}
+                    className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 pr-14 text-sm text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-orange-400 focus:ring-4 focus:ring-orange-100 disabled:opacity-60"
                   />
                   <button
                     type="button"
@@ -297,7 +344,6 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={loading}
@@ -307,14 +353,12 @@ export default function RegisterPage() {
                     : "bg-teal-600 hover:bg-teal-700 shadow-teal-200"
                 }`}
               >
-                {loading
-                  ? "Creating Account..."
-                  : `Create ${role === "student" ? "Student" : "Mentor"} Account`}
+                {loading ? "Creating Account…" : `Create ${role === "student" ? "Student" : "Mentor"} Account`}
                 {!loading && <ArrowRight className="w-4 h-4" />}
               </button>
             </form>
 
-            {/* divider */}
+            {/* Divider */}
             <div className="relative my-5">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t-2 border-dashed border-slate-200" />
@@ -341,13 +385,9 @@ export default function RegisterPage() {
               Continue with Google
             </button>
 
-            {/* sign in link */}
             <p className="mt-7 text-center text-sm text-slate-500 font-medium">
               Already have an account?{" "}
-              <Link
-                href="/login"
-                className="font-black text-orange-500 hover:text-orange-600 transition"
-              >
+              <Link href="/Login" className="font-black text-orange-500 hover:text-orange-600 transition">
                 Sign in
               </Link>
             </p>

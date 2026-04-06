@@ -107,8 +107,9 @@ function parseQuestions(text: string): Question[] {
   }));
 }
 
-async function callClaude(prompt: string): Promise<string> {
-  const res = await fetch("/api/claude", {
+// ── CHANGED: now hits /api/gemini instead of /api/claude ─────────────────────
+async function callGemini(prompt: string): Promise<string> {
+  const res = await fetch("/api/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
@@ -315,7 +316,8 @@ export default function DemoPage() {
     setQuestions([]); setQStates([]); setActiveMode(null); setError("");
   };
 
-  const scrollToResult = () => setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
+  const scrollToResult = () =>
+    setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
 
   const generate = async (mode: Mode) => {
     if (!notes.trim()) { setError("Please paste some notes first — or click 'Try sample note'!"); return; }
@@ -331,7 +333,8 @@ export default function DemoPage() {
     };
 
     try {
-      const text = await callClaude(prompts[mode]);
+      // ── CHANGED: callGemini instead of callClaude ──
+      const text = await callGemini(prompts[mode]);
       if (mode === "summary") setSummaryText(text);
       else if (mode === "explain") setExplainText(text);
       else {
@@ -354,7 +357,8 @@ export default function DemoPage() {
 
     try {
       const prompt = `Grade this student answer. Be encouraging and educational.\n\nQuestion: ${q.question}\nExpected answer: ${q.answer}\nStudent's answer: ${qStates[idx].userAnswer}\n\nRespond EXACTLY:\nVERDICT: [CORRECT / PARTIAL / INCORRECT]\nFEEDBACK: [2-3 sentences of specific, constructive feedback]`;
-      const text = await callClaude(prompt);
+      // ── CHANGED: callGemini instead of callClaude ──
+      const text = await callGemini(prompt);
       const verdictMatch = text.match(/VERDICT:\s*(CORRECT|PARTIAL|INCORRECT)/i);
       const feedbackMatch = text.match(/FEEDBACK:\s*([\s\S]+)/i);
       const grade = (verdictMatch?.[1].toLowerCase() ?? (text.toUpperCase().includes("CORRECT") ? "correct" : text.toUpperCase().includes("PARTIAL") ? "partial" : "incorrect")) as GradeResult;
@@ -376,7 +380,6 @@ export default function DemoPage() {
       <nav className="sticky top-0 z-50 bg-amber-50/90 backdrop-blur-md border-b border-amber-200/60">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            {/* Logo */}
             <Link href="/" className="flex items-center gap-2 select-none">
               <div className="w-8 h-8 rounded-xl bg-orange-500 flex items-center justify-center text-white shadow-md shadow-orange-200">
                 <Sparkles className="w-4 h-4" />
@@ -387,13 +390,11 @@ export default function DemoPage() {
               </span>
             </Link>
 
-            {/* Centre badge */}
             <div className="hidden sm:flex items-center gap-2 bg-orange-100 border border-orange-200 rounded-full px-3 py-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" />
               <span className="text-orange-700 text-xs font-black uppercase tracking-widest">Free Demo</span>
             </div>
 
-            {/* Right CTAs */}
             <div className="flex items-center gap-2">
               <Link
                 href="/Login"
@@ -442,7 +443,6 @@ export default function DemoPage() {
           {/* ── LEFT COLUMN ── */}
           <div className="lg:col-span-2 space-y-5">
 
-            {/* Step 1: Notes */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-5 shadow-sm">
               <div className="flex items-center gap-2 mb-3">
                 <div className="w-7 h-7 rounded-xl bg-orange-500 text-white text-xs font-black flex items-center justify-center shrink-0">1</div>
@@ -457,7 +457,6 @@ export default function DemoPage() {
                 className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 resize-none focus:outline-none focus:border-orange-400 focus:ring-4 focus:ring-orange-100 transition-all bg-slate-50 hover:bg-white leading-relaxed font-body"
               />
 
-              {/* stats */}
               <div className="flex items-center justify-between mt-2">
                 <div className="flex items-center gap-3 text-xs text-slate-400 font-semibold">
                   <span>{wordCount} words</span>
@@ -488,7 +487,6 @@ export default function DemoPage() {
               )}
             </div>
 
-            {/* Step 2: Choose action */}
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-5 shadow-sm">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-7 h-7 rounded-xl bg-orange-500 text-white text-xs font-black flex items-center justify-center shrink-0">2</div>
@@ -533,14 +531,12 @@ export default function DemoPage() {
               </div>
             </div>
 
-            {/* Locked features */}
             <LockedFeatures />
           </div>
 
           {/* ── RIGHT COLUMN ── */}
           <div className="lg:col-span-3 space-y-5">
 
-            {/* Explainer — shown before any result */}
             {!hasResult && !loading && (
               <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
                 <h3 className="font-display font-bold text-slate-900 text-base mb-5">What can this do?</h3>
@@ -558,12 +554,11 @@ export default function DemoPage() {
                   ))}
                 </div>
                 <div className="mt-5 pt-4 border-t-2 border-dashed border-slate-200 text-center">
-                  <p className="text-xs text-slate-400 font-semibold">No login required · Your notes are never stored · Powered by Claude AI</p>
+                  <p className="text-xs text-slate-400 font-semibold">No login required · Your notes are never stored · Powered by Gemini AI</p>
                 </div>
               </div>
             )}
 
-            {/* Loading skeleton */}
             {loading && (
               <div ref={resultRef} className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
                 <div className="flex items-center gap-3 mb-5">
@@ -583,7 +578,6 @@ export default function DemoPage() {
               </div>
             )}
 
-            {/* Summary result */}
             {!loading && summaryText && activeMode === "summary" && (
               <div ref={resultRef} className="bg-white border-2 border-orange-200 rounded-2xl p-6 shadow-sm">
                 <div className="flex items-center justify-between gap-3 mb-5 pb-4 border-b-2 border-dashed border-slate-200">
@@ -609,7 +603,6 @@ export default function DemoPage() {
               </div>
             )}
 
-            {/* Explain result */}
             {!loading && explainText && activeMode === "explain" && (
               <div ref={resultRef} className="bg-white border-2 border-violet-200 rounded-2xl p-6 shadow-sm">
                 <div className="flex items-center justify-between gap-3 mb-5 pb-4 border-b-2 border-dashed border-slate-200">
@@ -635,7 +628,6 @@ export default function DemoPage() {
               </div>
             )}
 
-            {/* Questions result */}
             {!loading && questions.length > 0 && activeMode === "questions" && (
               <div ref={resultRef} className="space-y-4">
                 <div className="bg-white border-2 border-teal-200 rounded-2xl p-5 shadow-sm">
@@ -690,7 +682,6 @@ export default function DemoPage() {
               </div>
             )}
 
-            {/* Post-result signup nudge */}
             {hasResult && !loading && (
               <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 text-white">
                 <div className="flex items-start gap-4">
