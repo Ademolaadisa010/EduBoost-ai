@@ -5,7 +5,8 @@ const GEMINI_API_URL =
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt } = await req.json();
+    const body = await req.json();
+    const { prompt, fileContent, fileName } = body;
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
@@ -19,18 +20,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Build parts — prepend file content if uploaded
+    const textParts: { text: string }[] = [];
+    if (fileContent && fileName) {
+      textParts.push({
+        text: `The user uploaded a file called "${fileName}". Here is its content:\n\n${fileContent}\n\n---\n\n`,
+      });
+    }
+    textParts.push({ text: prompt });
+
     const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
+        contents: [{ parts: textParts }],
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 1024,
+          maxOutputTokens: 2048,
         },
       }),
     });
@@ -45,20 +51,11 @@ export async function POST(req: NextRequest) {
     }
 
     const data = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 
-    // Normalise to the same shape your frontend already expects:
-    // data.content[0].text
-    const text =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-
-    return NextResponse.json({
-      content: [{ text }],
-    });
+    return NextResponse.json({ content: [{ text }] });
   } catch (err) {
     console.error("Gemini route error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
