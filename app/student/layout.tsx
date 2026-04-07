@@ -66,7 +66,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) {
-        router.replace("/Login");
+        router.replace("/sign-in");
         return;
       }
       try {
@@ -98,7 +98,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
     try {
       await signOut(auth);
       toast.success("Signed out successfully.", { id: toastId });
-      router.replace("/Login");
+      router.replace("/sign-in");
     } catch {
       toast.error("Sign out failed. Please try again.", { id: toastId });
     }

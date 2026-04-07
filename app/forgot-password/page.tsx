@@ -151,7 +151,7 @@ export default function ForgotPasswordPage() {
                 </div>
 
                 <Link
-                  href="/Login"
+                  href="/sign-in"
                   className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-orange-500 hover:bg-orange-600 py-3.5 text-sm font-black text-white shadow-lg shadow-orange-200 transition-all hover:-translate-y-0.5"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -163,7 +163,7 @@ export default function ForgotPasswordPage() {
               <>
                 {/* back link */}
                 <Link
-                  href="/Login"
+                  href="/sign-in"
                   className="inline-flex items-center gap-1.5 text-slate-500 hover:text-orange-500 text-sm font-bold transition-colors mb-8"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -231,7 +231,7 @@ export default function ForgotPasswordPage() {
                 <div className="mt-8 space-y-3 text-center">
                   <p className="text-sm text-slate-500 font-medium">
                     Remember your password?{" "}
-                    <Link href="/Login" className="font-black text-orange-500 hover:text-orange-600 transition">
+                    <Link href="/sign-in" className="font-black text-orange-500 hover:text-orange-600 transition">
                       Sign in
                     </Link>
                   </p>

@@ -2,12 +2,12 @@
 
 import { useState, useRef, useCallback } from "react";
 import {
-  BookOpen, HelpCircle, Lightbulb, Upload, RotateCcw,
+  BookOpen, HelpCircle, Lightbulb, RotateCcw,
   AlertCircle, ChevronRight, Sparkles, ArrowRight,
-  CheckCircle2, MinusCircle, FileText, X, CloudUpload,
+  CheckCircle2, MinusCircle, X, CloudUpload, FileText,
 } from "lucide-react";
 import { auth } from "@/lib/firebase";
-import toast from "react-hot-toast";
+import toast, { Toaster } from "react-hot-toast";
 
 type StudyMode = "summary" | "questions" | "explain";
 type GradeResult = "correct" | "partial" | "incorrect" | null;
@@ -21,8 +21,8 @@ interface UploadedFile {
   fileName: string;
   fileType: string;
   fileSize: number;
-  signedUrl: string;
-  extractedText: string | null;
+  base64Data: string;        // sent directly to Gemini
+  extractedText: string | null; // only for .txt
 }
 
 const SAMPLE_NOTE = `The mitochondria is the powerhouse of the cell. It produces ATP through cellular respiration — three stages: glycolysis, the Krebs cycle, and the electron transport chain. Oxygen is required for aerobic respiration, producing 36–38 ATP per glucose.
@@ -37,12 +37,12 @@ const MODES = [
   { key: "explain"   as StudyMode, icon: <Lightbulb className="w-5 h-5" />,  label: "Explain Simply",     desc: "Plain-language breakdown",            activeBorder: "border-violet-400", activeBg: "bg-violet-50", activeText: "text-violet-700" },
 ];
 
-const ACCEPTED_TYPES = [
-  "application/pdf",
-  "text/plain",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-];
+const ACCEPTED_TYPES: Record<string, string> = {
+  "application/pdf": "PDF",
+  "text/plain": "TXT",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX",
+};
 
 function Spinner({ className = "w-4 h-4" }: { className?: string }) {
   return (
@@ -63,13 +63,12 @@ function parseQuestions(text: string): Question[] {
   }));
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
+function formatFileSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function fileIcon(type: string) {
+function fileEmoji(type: string) {
   if (type === "application/pdf") return "📄";
   if (type === "text/plain") return "📝";
   if (type.includes("word")) return "📘";
@@ -77,13 +76,20 @@ function fileIcon(type: string) {
   return "📁";
 }
 
-async function callGemini(prompt: string, fileContent?: string, fileName?: string): Promise<string> {
+// ── Call Gemini — supports native PDF via base64 ──────────────────────────────
+async function callGemini(
+  prompt: string,
+  opts?: { base64Data?: string; mimeType?: string; fileContent?: string; fileName?: string }
+): Promise<string> {
   const res = await fetch("/api/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, fileContent, fileName }),
+    body: JSON.stringify({ prompt, ...opts }),
   });
-  if (!res.ok) throw new Error("API error");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error ?? "API error");
+  }
   const data = await res.json();
   return data.content?.[0]?.text || "";
 }
@@ -106,47 +112,39 @@ export default function StudyPage() {
   const wordCount = notes.trim() ? notes.trim().split(/\s+/).length : 0;
   const hasResult = summaryText || explainText || questions.length > 0;
 
-  // Source of truth for AI: uploaded file text OR pasted notes
-  const activeNotes = uploadedFile?.extractedText || notes;
-  const activeFileName = uploadedFile?.fileName;
-
   const clearAll = () => {
     setNotes(""); setSummaryText(""); setExplainText("");
     setQuestions([]); setQStates([]); setActiveMode(null); setError("");
     setUploadedFile(null);
   };
 
-  // ── File upload ───────────────────────────────────────────────────────────
+  // ── Upload handler ────────────────────────────────────────────────────────
   const handleUpload = useCallback(async (file: File) => {
-    if (!ACCEPTED_TYPES.includes(file.type)) {
-      toast.error("Unsupported file type. Use PDF, TXT, DOCX, or PPTX.");
+    if (!ACCEPTED_TYPES[file.type]) {
+      toast.error("Unsupported file. Use PDF, TXT, DOCX, or PPTX.");
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      toast.error("File too large. Max 50MB.");
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("File too large. Max 20MB.");
       return;
     }
 
     setUploading(true);
-    const toastId = toast.loading(`Uploading ${file.name}…`);
+    const toastId = toast.loading(`Reading ${file.name}…`);
 
     try {
       const user = auth.currentUser;
-      if (!user) {
-        toast.error("Please sign in to upload files.", { id: toastId });
-        return;
-      }
-
-      const token = await user.getIdToken();
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData,
-      });
+      // Build headers — attach token if user is signed in (saves to Firestore)
+      const headers: Record<string, string> = {};
+      if (user) {
+        const token = await user.getIdToken();
+        headers["Authorization"] = `Bearer ${token}`;
+      }
 
+      const res = await fetch("/api/upload", { method: "POST", headers, body: formData });
       const data = await res.json();
 
       if (!res.ok) {
@@ -157,23 +155,18 @@ export default function StudyPage() {
       setUploadedFile({
         fileName: data.fileName,
         fileType: data.fileType,
-        fileSize: file.size,
-        signedUrl: data.signedUrl,
+        fileSize: data.fileSize,
+        base64Data: data.base64Data,
         extractedText: data.extractedText,
       });
 
-      // Clear pasted notes when file uploaded
       setNotes("");
       setSummaryText(""); setExplainText(""); setQuestions([]); setQStates([]);
       setActiveMode(null); setError("");
 
-      if (data.extractedText) {
-        toast.success(`${file.name} uploaded and ready!`, { id: toastId });
-      } else {
-        toast.success(`${file.name} uploaded! For PDF/DOCX, paste the text content too for best results.`, { id: toastId, duration: 6000 });
-      }
+      toast.success(`${file.name} ready — choose an action below!`, { id: toastId });
     } catch {
-      toast.error("Upload failed. Please try again.", { id: toastId });
+      toast.error("Could not process file. Please try again.", { id: toastId });
     } finally {
       setUploading(false);
     }
@@ -192,15 +185,13 @@ export default function StudyPage() {
     if (file) handleUpload(file);
   }, [handleUpload]);
 
-  // ── Generate AI response ──────────────────────────────────────────────────
+  // ── Generate ──────────────────────────────────────────────────────────────
   const generate = async (mode: StudyMode) => {
-    const source = activeNotes.trim();
-    if (!source) {
-      setError(uploadedFile ? "File uploaded but no text could be extracted. Please paste the content below." : "Paste your notes first — or upload a file.");
-      return;
-    }
-    if (source.length < 50) {
-      setError("Notes too short. Paste at least a paragraph.");
+    const hasFile = !!uploadedFile;
+    const hasNotes = notes.trim().length >= 50;
+
+    if (!hasFile && !hasNotes) {
+      setError("Upload a file or paste at least a paragraph of notes first.");
       return;
     }
 
@@ -208,15 +199,38 @@ export default function StudyPage() {
     setSummaryText(""); setExplainText(""); setQuestions([]); setQStates([]);
     setTimeout(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 100);
 
+    // Use notes as extra context even when file is present
+    const noteContext = notes.trim() ? `\n\nAdditional notes from the student:\n${notes.trim()}` : "";
+
     const prompts: Record<StudyMode, string> = {
-      summary:   `You are a study assistant. Summarise these notes:\n- One-sentence overview at top\n- 5-8 bullet points (use •) with key concepts\n- Bold (**text**) important terms\n\nNotes:\n${source}`,
-      questions: `Generate exactly 3 practice questions from these notes.\nFormat:\nQ1: [question]\nQ2: [question]\nQ3: [question]\n---ANSWERS---\nA1: [2-3 sentence answer]\nA2: [2-3 sentence answer]\nA3: [2-3 sentence answer]\n\nNotes:\n${source}`,
-      explain:   `Explain these notes in simple language for a 15-year-old. Use analogies, short paragraphs, no jargon. Define technical terms.\n\nNotes:\n${source}`,
+      summary:   `You are a study assistant. Summarise the provided content:\n- One-sentence overview at top\n- 5-8 bullet points (use •) covering key concepts\n- Bold (**text**) important terms${noteContext}`,
+      questions: `Generate exactly 3 practice questions from the provided content.\nFormat:\nQ1: [question]\nQ2: [question]\nQ3: [question]\n---ANSWERS---\nA1: [2-3 sentence answer]\nA2: [2-3 sentence answer]\nA3: [2-3 sentence answer]${noteContext}`,
+      explain:   `Explain the provided content simply for a 15-year-old. Use analogies, short paragraphs, no jargon. Define every technical term.${noteContext}`,
     };
 
     try {
-      // Pass file metadata to Gemini for better context
-      const text = await callGemini(prompts[mode], uploadedFile?.extractedText ?? undefined, activeFileName);
+      let text: string;
+
+      if (uploadedFile) {
+        if (uploadedFile.fileType === "text/plain" && uploadedFile.extractedText) {
+          // TXT: send as plain text context
+          text = await callGemini(prompts[mode], {
+            fileContent: uploadedFile.extractedText,
+            fileName: uploadedFile.fileName,
+          });
+        } else {
+          // PDF/DOCX/PPTX: send as native base64 — Gemini reads the file directly
+          text = await callGemini(prompts[mode], {
+            base64Data: uploadedFile.base64Data,
+            mimeType: uploadedFile.fileType,
+            fileName: uploadedFile.fileName,
+          });
+        }
+      } else {
+        // Pasted notes only
+        text = await callGemini(`${prompts[mode]}\n\nNotes:\n${notes.trim()}`);
+      }
+
       if (mode === "summary") setSummaryText(text);
       else if (mode === "explain") setExplainText(text);
       else {
@@ -224,8 +238,9 @@ export default function StudyPage() {
         setQuestions(p);
         setQStates(p.map(() => ({ userAnswer: "", grade: null, feedback: "", loading: false, submitted: false })));
       }
-    } catch {
-      setError("AI connection failed. Please try again.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "AI connection failed.";
+      setError(`${msg} Please try again.`);
       setActiveMode(null);
     } finally {
       setLoading(false);
@@ -237,7 +252,7 @@ export default function StudyPage() {
     setQStates((p) => p.map((s, i) => i === idx ? { ...s, loading: true } : s));
     try {
       const text = await callGemini(
-        `Grade this student answer.\nQuestion: ${questions[idx].question}\nExpected: ${questions[idx].answer}\nStudent: ${qStates[idx].userAnswer}\n\nRespond EXACTLY:\nVERDICT: [CORRECT / PARTIAL / INCORRECT]\nFEEDBACK: [2-3 constructive sentences]`
+        `Grade this student answer.\nQuestion: ${questions[idx].question}\nExpected: ${questions[idx].answer}\nStudent answer: ${qStates[idx].userAnswer}\n\nRespond EXACTLY:\nVERDICT: [CORRECT / PARTIAL / INCORRECT]\nFEEDBACK: [2-3 constructive sentences]`
       );
       const verdictMatch  = text.match(/VERDICT:\s*(CORRECT|PARTIAL|INCORRECT)/i);
       const feedbackMatch = text.match(/FEEDBACK:\s*([\s\S]+)/i);
@@ -257,6 +272,8 @@ export default function StudyPage() {
 
   return (
     <div className="space-y-5">
+      <Toaster position="top-center" toastOptions={{ style: { borderRadius: "14px", fontWeight: 600, fontSize: "14px" }, success: { iconTheme: { primary: "#f97316", secondary: "#fff" } }, error: { iconTheme: { primary: "#ef4444", secondary: "#fff" } } }} />
+
       <div>
         <h2 className="font-display font-black text-slate-900 text-2xl mb-1">Study Assistant</h2>
         <p className="text-slate-500 text-sm font-medium">Upload a file or paste your notes — Gemini AI does the rest.</p>
@@ -264,77 +281,52 @@ export default function StudyPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
 
-        {/* ── Left column ── */}
+        {/* ── LEFT ── */}
         <div className="lg:col-span-2 space-y-4">
 
-          {/* Upload zone */}
+          {/* Upload zone / file card */}
           {!uploadedFile ? (
             <div
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => !uploading && fileInputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={onDrop}
               className={`bg-white border-2 border-dashed rounded-2xl p-6 flex flex-col items-center gap-3 cursor-pointer transition-all group
-                ${dragOver ? "border-orange-500 bg-orange-50 scale-[1.01]" : "border-slate-300 hover:border-orange-400"}`}
+                ${dragOver ? "border-orange-500 bg-orange-50 scale-[1.01]" : uploading ? "border-slate-300 opacity-70 cursor-wait" : "border-slate-300 hover:border-orange-400"}`}
             >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.txt,.docx,.pptx"
-                onChange={onFileInput}
-                className="hidden"
-              />
+              <input ref={fileInputRef} type="file" accept=".pdf,.txt,.docx,.pptx" onChange={onFileInput} className="hidden" />
               <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors ${dragOver ? "bg-orange-200" : "bg-orange-100 group-hover:bg-orange-200"}`}>
-                {uploading
-                  ? <Spinner className="w-6 h-6 text-orange-600" />
-                  : <CloudUpload className="w-6 h-6 text-orange-600" />
-                }
+                {uploading ? <Spinner className="w-6 h-6 text-orange-600" /> : <CloudUpload className="w-6 h-6 text-orange-600" />}
               </div>
               <div className="text-center">
                 <p className="font-display font-bold text-slate-700 text-sm">
-                  {uploading ? "Uploading…" : dragOver ? "Drop it!" : "Drop file or click to upload"}
+                  {uploading ? "Processing file…" : dragOver ? "Drop it!" : "Drop file or click to upload"}
                 </p>
-                <p className="text-slate-400 text-xs font-medium mt-0.5">PDF · TXT · DOCX · PPTX — up to 50MB</p>
+                <p className="text-slate-400 text-xs font-medium mt-0.5">PDF · TXT · DOCX · PPTX — up to 20MB</p>
               </div>
             </div>
           ) : (
-            /* Uploaded file card */
             <div className="bg-white border-2 border-teal-200 rounded-2xl p-4">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 rounded-xl bg-teal-100 flex items-center justify-center text-xl flex-shrink-0">
-                  {fileIcon(uploadedFile.fileType)}
+                  {fileEmoji(uploadedFile.fileType)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-slate-800 text-sm font-black truncate">{uploadedFile.fileName}</p>
-                  <p className="text-slate-400 text-xs font-semibold">{formatFileSize(uploadedFile.fileSize)} · Saved to cloud ✓</p>
+                  <p className="text-slate-400 text-xs font-semibold">
+                    {formatFileSize(uploadedFile.fileSize)} · {ACCEPTED_TYPES[uploadedFile.fileType]} · Ready for Gemini ✓
+                  </p>
                 </div>
-                <button
-                  onClick={() => { setUploadedFile(null); setNotes(""); clearAll(); }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                >
+                <button onClick={() => { setUploadedFile(null); clearAll(); }} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              {!uploadedFile.extractedText && (
-                <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-start gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-amber-700 text-xs font-medium">
-                    PDF/DOCX text extraction coming soon. Paste the text below for AI to read it.
-                  </p>
-                </div>
-              )}
-              {uploadedFile.extractedText && (
-                <div className="mt-3 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2 flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                  <p className="text-teal-700 text-xs font-bold">Text extracted — ready for AI analysis</p>
-                </div>
-              )}
-              {/* Allow re-upload */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="mt-3 w-full text-xs font-black text-slate-500 hover:text-orange-600 transition-colors text-center"
-              >
-                Upload a different file
+              <div className="mt-3 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2 flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                <p className="text-teal-700 text-xs font-bold">File sent to Gemini — choose an action below</p>
+              </div>
+              <button onClick={() => fileInputRef.current?.click()} className="mt-2 w-full text-xs font-bold text-slate-400 hover:text-orange-500 transition-colors">
+                Upload different file
               </button>
               <input ref={fileInputRef} type="file" accept=".pdf,.txt,.docx,.pptx" onChange={onFileInput} className="hidden" />
             </div>
@@ -344,7 +336,7 @@ export default function StudyPage() {
           <div className="bg-white border-2 border-slate-200 rounded-2xl p-5">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                {uploadedFile && !uploadedFile.extractedText ? "Paste notes (PDF fallback)" : "Or paste notes"}
+                {uploadedFile ? "Extra notes (optional)" : "Or paste notes"}
               </p>
               <div className="flex gap-2">
                 {(notes || uploadedFile) && (
@@ -352,29 +344,24 @@ export default function StudyPage() {
                     <RotateCcw className="w-3 h-3" /> Clear
                   </button>
                 )}
-                <button
-                  onClick={() => { setUploadedFile(null); setNotes(SAMPLE_NOTE); }}
-                  className="text-xs font-black text-orange-600 bg-orange-50 border border-orange-200 px-2.5 py-1 rounded-lg hover:bg-orange-100 transition-colors"
-                >
-                  Try sample
-                </button>
+                {!uploadedFile && (
+                  <button onClick={() => setNotes(SAMPLE_NOTE)} className="text-xs font-black text-orange-600 bg-orange-50 border border-orange-200 px-2.5 py-1 rounded-lg hover:bg-orange-100 transition-colors">
+                    Try sample
+                  </button>
+                )}
               </div>
             </div>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder={uploadedFile?.extractedText ? "File content loaded — you can also add extra notes here…" : "Paste lecture notes, textbook content…"}
-              rows={9}
+              placeholder={uploadedFile ? "Add extra context or extra notes here (optional)…" : "Paste lecture notes, textbook content…"}
+              rows={uploadedFile ? 4 : 9}
               className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 resize-none focus:outline-none focus:border-orange-400 focus:ring-4 focus:ring-orange-100 transition-all bg-slate-50 font-body leading-relaxed"
             />
             <div className="flex items-center gap-3 mt-2 text-xs font-semibold text-slate-400">
-              {uploadedFile?.extractedText
-                ? <span className="text-teal-600 flex items-center gap-1"><FileText className="w-3 h-3" /> Using uploaded file content</span>
-                : <>
-                    <span>{wordCount} words</span>
-                    {notes.length >= 50 && <span className="text-teal-600">✓ Good length</span>}
-                    {notes.length > 0 && notes.length < 50 && <span className="text-amber-500">⚠ Too short</span>}
-                  </>
+              {uploadedFile
+                ? <span className="flex items-center gap-1 text-teal-600"><FileText className="w-3 h-3" /> File loaded as primary source</span>
+                : <><span>{wordCount} words</span>{notes.length >= 50 && <span className="text-teal-600">✓ Good</span>}{notes.length > 0 && notes.length < 50 && <span className="text-amber-500">⚠ Too short</span>}</>
               }
             </div>
             {error && (
@@ -390,29 +377,20 @@ export default function StudyPage() {
             {MODES.map((m) => {
               const isActive = activeMode === m.key;
               return (
-                <button
-                  key={m.key}
-                  onClick={() => generate(m.key)}
-                  disabled={loading}
+                <button key={m.key} onClick={() => generate(m.key)} disabled={loading}
                   className={`w-full text-left border-2 rounded-xl p-3.5 transition-all hover:-translate-y-0.5 hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed
-                    ${isActive && !loading ? `${m.activeBorder} ${m.activeBg} shadow-sm` : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"}`}
-                >
+                    ${isActive && !loading ? `${m.activeBorder} ${m.activeBg} shadow-sm` : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white"}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-lg transition-colors ${isActive ? `${m.activeBg} ${m.activeText}` : "bg-slate-200 text-slate-500"}`}>
-                        {m.icon}
-                      </div>
+                      <div className={`p-2 rounded-lg transition-colors ${isActive ? `${m.activeBg} ${m.activeText}` : "bg-slate-200 text-slate-500"}`}>{m.icon}</div>
                       <div>
                         <p className="font-display font-bold text-slate-900 text-sm">{m.label}</p>
                         <p className="text-xs text-slate-500 font-medium">{m.desc}</p>
                       </div>
                     </div>
-                    {loading && isActive
-                      ? <Spinner />
-                      : isActive && hasResult
-                        ? <span className={`text-xs font-black px-2 py-0.5 rounded-full ${m.activeBg} ${m.activeText}`}>Done ✓</span>
-                        : <ChevronRight className="w-4 h-4 text-slate-300" />
-                    }
+                    {loading && isActive ? <Spinner />
+                      : isActive && hasResult ? <span className={`text-xs font-black px-2 py-0.5 rounded-full ${m.activeBg} ${m.activeText}`}>Done ✓</span>
+                      : <ChevronRight className="w-4 h-4 text-slate-300" />}
                   </div>
                 </button>
               );
@@ -420,10 +398,9 @@ export default function StudyPage() {
           </div>
         </div>
 
-        {/* ── Right column — results ── */}
+        {/* ── RIGHT — results ── */}
         <div className="lg:col-span-3 space-y-4">
 
-          {/* Empty state */}
           {!hasResult && !loading && (
             <div className="bg-white border-2 border-slate-200 rounded-2xl p-10 text-center">
               <div className="w-16 h-16 bg-orange-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -431,7 +408,7 @@ export default function StudyPage() {
               </div>
               <h3 className="font-display font-bold text-slate-900 text-lg mb-2">Ready when you are</h3>
               <p className="text-slate-500 text-sm font-medium max-w-xs mx-auto">
-                Upload a file or paste your notes on the left, then choose an AI action.
+                Upload a file or paste your notes, then pick an AI action.
               </p>
               <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400 font-semibold">
                 <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
@@ -440,7 +417,6 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* Loading skeleton */}
           {loading && (
             <div ref={resultRef} className="bg-white border-2 border-slate-200 rounded-2xl p-6">
               <div className="flex items-center gap-3 mb-5">
@@ -449,7 +425,7 @@ export default function StudyPage() {
                 </div>
                 <div>
                   <p className="font-display font-bold text-slate-900 text-sm">Gemini is thinking…</p>
-                  <p className="text-xs text-slate-400 font-medium">Usually 5–10 seconds</p>
+                  <p className="text-xs text-slate-400 font-medium">Usually 5–15 seconds</p>
                 </div>
               </div>
               <div className="space-y-3">
@@ -460,18 +436,13 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* Summary result */}
+          {/* Summary */}
           {!loading && summaryText && activeMode === "summary" && (
             <div ref={resultRef} className="bg-white border-2 border-orange-200 rounded-2xl p-6">
               <div className="flex items-center justify-between gap-3 mb-5 pb-4 border-b-2 border-dashed border-slate-200">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-orange-500 flex items-center justify-center shrink-0"><BookOpen className="w-4 h-4 text-white" /></div>
-                  <div>
-                    <p className="font-display font-bold text-slate-900 text-sm">Summary</p>
-                    <p className="text-xs text-slate-400 font-medium">
-                      {uploadedFile ? `From: ${uploadedFile.fileName}` : "Key concepts extracted"}
-                    </p>
-                  </div>
+                  <div><p className="font-display font-bold text-slate-900 text-sm">Summary</p><p className="text-xs text-slate-400 font-medium">{uploadedFile?.fileName ?? "From your notes"}</p></div>
                 </div>
                 <span className="text-xs font-black text-orange-700 bg-orange-100 px-3 py-1 rounded-full">Done ✓</span>
               </div>
@@ -491,18 +462,13 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* Explain result */}
+          {/* Explain */}
           {!loading && explainText && activeMode === "explain" && (
             <div ref={resultRef} className="bg-white border-2 border-violet-200 rounded-2xl p-6">
               <div className="flex items-center justify-between gap-3 mb-5 pb-4 border-b-2 border-dashed border-slate-200">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-violet-600 flex items-center justify-center shrink-0"><Lightbulb className="w-4 h-4 text-white" /></div>
-                  <div>
-                    <p className="font-display font-bold text-slate-900 text-sm">Simple Explanation</p>
-                    <p className="text-xs text-slate-400 font-medium">
-                      {uploadedFile ? `From: ${uploadedFile.fileName}` : "Plain language, no jargon"}
-                    </p>
-                  </div>
+                  <div><p className="font-display font-bold text-slate-900 text-sm">Simple Explanation</p><p className="text-xs text-slate-400 font-medium">{uploadedFile?.fileName ?? "Plain language"}</p></div>
                 </div>
                 <span className="text-xs font-black text-violet-700 bg-violet-100 px-3 py-1 rounded-full">Done ✓</span>
               </div>
@@ -518,19 +484,14 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* Questions result */}
+          {/* Questions */}
           {!loading && questions.length > 0 && activeMode === "questions" && (
             <div ref={resultRef} className="space-y-4">
               <div className="bg-white border-2 border-teal-200 rounded-2xl p-5">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-9 h-9 rounded-xl bg-teal-600 flex items-center justify-center shrink-0"><HelpCircle className="w-4 h-4 text-white" /></div>
-                    <div>
-                      <p className="font-display font-bold text-slate-900 text-sm">Practice Questions</p>
-                      <p className="text-xs text-slate-400 font-medium">
-                        {questions.length} questions · {uploadedFile ? uploadedFile.fileName : "from your notes"}
-                      </p>
-                    </div>
+                    <div><p className="font-display font-bold text-slate-900 text-sm">Practice Questions</p><p className="text-xs text-slate-400 font-medium">{questions.length} questions · {uploadedFile?.fileName ?? "from your notes"}</p></div>
                   </div>
                   <span className="text-xs font-black text-teal-700 bg-teal-100 px-3 py-1 rounded-full">Quiz Mode</span>
                 </div>
@@ -551,12 +512,10 @@ export default function StudyPage() {
                     </div>
                     {(!s.submitted || s.grade !== "correct") && (
                       <>
-                        <textarea
-                          value={s.userAnswer}
+                        <textarea value={s.userAnswer}
                           onChange={(e) => { const v = e.target.value; setQStates((p) => p.map((x, j) => j === i ? { ...x, userAnswer: v, submitted: false, grade: null, feedback: "" } : x)); }}
                           placeholder="Your answer…" rows={3} disabled={s.loading}
-                          className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 resize-none focus:outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 bg-slate-50 font-body"
-                        />
+                          className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 resize-none focus:outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 bg-slate-50 font-body" />
                         <button onClick={() => gradeAnswer(i)} disabled={s.loading || !s.userAnswer.trim()}
                           className="mt-3 inline-flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-black px-5 py-2.5 rounded-xl shadow-md shadow-teal-200 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                           {s.loading ? <><Spinner />Grading…</> : <>Check answer <ArrowRight className="w-3.5 h-3.5" /></>}

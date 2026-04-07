@@ -6,7 +6,7 @@ const GEMINI_API_URL =
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { prompt, fileContent, fileName } = body;
+    const { prompt, fileContent, fileName, base64Data, mimeType } = body;
 
     if (!prompt || typeof prompt !== "string") {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
@@ -20,20 +20,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build parts — prepend file content if uploaded
-    const textParts: { text: string }[] = [];
-    if (fileContent && fileName) {
-      textParts.push({
-        text: `The user uploaded a file called "${fileName}". Here is its content:\n\n${fileContent}\n\n---\n\n`,
+    // ── Build Gemini parts ────────────────────────────────────────────────────
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parts: any[] = [];
+
+    if (base64Data && mimeType) {
+      // Send PDF or other binary file natively — Gemini reads it directly
+      parts.push({
+        inline_data: {
+          mime_type: mimeType,
+          data: base64Data,
+        },
+      });
+      if (fileName) {
+        parts.push({ text: `The file above is named "${fileName}".\n\n` });
+      }
+    } else if (fileContent && fileName) {
+      // Plain text file content
+      parts.push({
+        text: `The user uploaded a file called "${fileName}":\n\n${fileContent}\n\n---\n\n`,
       });
     }
-    textParts.push({ text: prompt });
+
+    parts.push({ text: prompt });
 
     const response = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: textParts }],
+        contents: [{ parts }],
         generationConfig: {
           temperature: 0.7,
           maxOutputTokens: 2048,

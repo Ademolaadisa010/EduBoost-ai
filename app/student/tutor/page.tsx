@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Bot, Send, ChevronDown, Loader2, BookOpen, RefreshCw } from "lucide-react";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Message {
@@ -9,9 +13,9 @@ interface Message {
   text: string;
 }
 
-// ─── API call — Gemini via your /api/claude route ─────────────────────────────
+// ─── Gemini API call via your /api/claude route ───────────────────────────────
 async function callGemini(prompt: string): Promise<string> {
-  const res = await fetch("/api/claude", {
+  const res = await fetch("/api/gemini", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
@@ -21,45 +25,32 @@ async function callGemini(prompt: string): Promise<string> {
   return data.content?.[0]?.text ?? "";
 }
 
-// ─── Firebase — fetch student's enrolled subjects ─────────────────────────────
-// Firestore paths tried (in order):
-//   1. users/{uid}  →  field: subjects  (string[])
-//   2. users/{uid}/profile/data  →  field: subjects  (string[])
-// Falls back to DEFAULT_SUBJECTS if Firebase isn't configured or field is missing.
-async function fetchSubjectsFromFirebase(uid: string): Promise<string[]> {
-  const { initializeApp, getApps } = await import("firebase/app");
-  const { getFirestore, doc, getDoc } = await import("firebase/firestore");
-
-  const config = {
-    apiKey:            process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain:        process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    projectId:         process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket:     process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId:             process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  };
-
-  const app = getApps().length ? getApps()[0] : initializeApp(config);
-  const db  = getFirestore(app);
-
-  // Try top-level user doc first
+// ─── Fetch subjects — mirrors exactly what profile page saves ─────────────────
+// Profile page saves to: doc(db, "users", uid)  →  field: subjects (string[])
+async function fetchSubjectsForUser(uid: string): Promise<string[]> {
+  // Primary path — top-level user doc (matches profile page's updateDoc target)
   const userSnap = await getDoc(doc(db, "users", uid));
   if (userSnap.exists()) {
     const d = userSnap.data();
-    if (Array.isArray(d?.subjects) && d.subjects.length > 0) return d.subjects;
+    if (Array.isArray(d?.subjects) && d.subjects.length > 0) {
+      return d.subjects as string[];
+    }
   }
-
-  // Try nested profile doc
-  const profileSnap = await getDoc(doc(db, "users", uid, "profile", "data"));
-  if (profileSnap.exists()) {
-    const d = profileSnap.data();
-    if (Array.isArray(d?.subjects) && d.subjects.length > 0) return d.subjects;
-  }
-
-  return []; // nothing found
+  return [];
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// ─── Fetch display name from profile ─────────────────────────────────────────
+// Profile page saves fullName to: doc(db, "users", uid) → field: fullName
+async function fetchDisplayName(uid: string): Promise<string> {
+  const snap = await getDoc(doc(db, "users", uid));
+  if (snap.exists()) {
+    const d = snap.data();
+    return (d?.fullName as string | undefined)?.trim() || "";
+  }
+  return "";
+}
+
+// ─── Default subjects (fallback when none saved in Firestore) ─────────────────
 const DEFAULT_SUBJECTS = [
   "Mathematics",
   "Biology",
@@ -73,6 +64,7 @@ const DEFAULT_SUBJECTS = [
   "Geography",
 ];
 
+// ─── Quick prompts ────────────────────────────────────────────────────────────
 const QUICK_PROMPTS = [
   "Explain this topic simply",
   "Give me a step-by-step example",
@@ -81,19 +73,7 @@ const QUICK_PROMPTS = [
   "Summarise the key formulas",
 ];
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    role: "ai",
-    text: "Hi Amara! 👋 I'm your AI tutor. I can explain concepts, solve problems step-by-step, or help you practise for exams. What subject are we working on today?",
-  },
-  { role: "user", text: "Can you explain the quadratic formula?" },
-  {
-    role: "ai",
-    text: "Of course! The quadratic formula solves any equation of the form ax² + bx + c = 0.\n\nThe formula is: x = (−b ± √(b²−4ac)) / 2a\n\nThe ± means there are usually two solutions. The part under the root — b²−4ac — is called the discriminant:\n• Positive → 2 real solutions\n• Zero → exactly 1 solution\n• Negative → no real solutions\n\nWant me to walk through a worked example?",
-  },
-];
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Spinner ──────────────────────────────────────────────────────────────────
 function Spinner({ className = "w-4 h-4" }: { className?: string }) {
   return (
     <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" fill="none">
@@ -103,11 +83,14 @@ function Spinner({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+// ─── Subject dropdown ─────────────────────────────────────────────────────────
 function SubjectDropdown({
   value, onChange, subjects, loading,
 }: {
-  value: string; onChange: (v: string) => void;
-  subjects: string[]; loading: boolean;
+  value: string;
+  onChange: (v: string) => void;
+  subjects: string[];
+  loading: boolean;
 }) {
   return (
     <div className="relative w-full sm:w-56">
@@ -132,66 +115,142 @@ function SubjectDropdown({
   );
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
 export default function TutorPage() {
-  const [messages, setMessages]             = useState<Message[]>(INITIAL_MESSAGES);
-  const [input, setInput]                   = useState("");
-  const [sending, setSending]               = useState(false);
+  const router = useRouter();
 
-  const [subject, setSubject]               = useState("Mathematics");
-  const [subjects, setSubjects]             = useState<string[]>(DEFAULT_SUBJECTS);
-  const [subjectsLoading, setSubjectsLoading] = useState(true);
-  const [subjectsFetchState, setSubjectsFetchState] = useState<"idle" | "firebase" | "default" | "error">("idle");
+  // ── Auth + profile ──────────────────────────────────────────────────────────
+  const [uid,         setUid]         = useState<string | null>(null);
+  const [firstName,   setFirstName]   = useState("there");   // used in greeting
+  const [authReady,   setAuthReady]   = useState(false);     // true once onAuthStateChanged fires
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  // ── Subjects ────────────────────────────────────────────────────────────────
+  const [subjects,         setSubjects]         = useState<string[]>(DEFAULT_SUBJECTS);
+  const [subject,          setSubject]          = useState("Mathematics");
+  const [subjectsLoading,  setSubjectsLoading]  = useState(true);
+  const [fetchState,       setFetchState]       = useState<"idle" | "loaded" | "default" | "error">("idle");
 
-  // ── Fetch subjects on mount ─────────────────────────────────────────────────
-  const loadSubjects = async () => {
-    setSubjectsLoading(true);
-    setSubjectsFetchState("idle");
+  // ── Chat ────────────────────────────────────────────────────────────────────
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input,    setInput]    = useState("");
+  const [sending,  setSending]  = useState(false);
+  const bottomRef               = useRef<HTMLDivElement>(null);
 
-    try {
-      // Replace "PLACEHOLDER_UID" with your real auth logic:
-      // const { getAuth } = await import("firebase/auth");
-      // const uid = getAuth().currentUser?.uid;
-      // if (!uid) throw new Error("Not authenticated");
-      const uid = "PLACEHOLDER_UID";
+  // ── Step 1: listen for Firebase Auth state ──────────────────────────────────
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        // Not logged in → redirect to login
+        router.replace("/login");
+        return;
+      }
+      setUid(user.uid);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, [router]);
 
-      const fetched = await fetchSubjectsFromFirebase(uid);
+  // ── Step 2: once auth is ready, load profile + subjects ────────────────────
+  useEffect(() => {
+    if (!authReady || !uid) return;
 
-      if (fetched.length > 0) {
-        setSubjects(fetched);
-        setSubject(fetched[0]);
-        setSubjectsFetchState("firebase");
-      } else {
+    let cancelled = false;
+
+    async function loadProfile() {
+      setSubjectsLoading(true);
+      setFetchState("idle");
+
+      try {
+        // Load display name and subjects in parallel
+        const [name, fetched] = await Promise.all([
+          fetchDisplayName(uid!),
+          fetchSubjectsForUser(uid!),
+        ]);
+
+        if (cancelled) return;
+
+        // Set first name for the greeting
+        if (name) {
+          setFirstName(name.split(" ")[0]);
+        }
+
+        // Set subjects
+        if (fetched.length > 0) {
+          setSubjects(fetched);
+          setSubject(fetched[0]);
+          setFetchState("loaded");
+        } else {
+          setSubjects(DEFAULT_SUBJECTS);
+          setSubject(DEFAULT_SUBJECTS[0]);
+          setFetchState("default");
+        }
+
+        // Now build the initial greeting using the real name + first subject
+        const greetingName  = name ? name.split(" ")[0] : "there";
+        const firstSubject  = fetched.length > 0 ? fetched[0] : DEFAULT_SUBJECTS[0];
+
+        setMessages([
+          {
+            role: "ai",
+            text: `Hi ${greetingName}! 👋 I'm your AI tutor. I can explain concepts, solve problems step-by-step, or help you practise for exams.\n\nI can see you're studying ${firstSubject} — want to start there, or pick a different subject from the dropdown above?`,
+          },
+        ]);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("[tutor] profile load error:", err);
         setSubjects(DEFAULT_SUBJECTS);
         setSubject(DEFAULT_SUBJECTS[0]);
-        setSubjectsFetchState("default");
+        setFetchState("error");
+        setMessages([
+          {
+            role: "ai",
+            text: "Hi! 👋 I'm your AI tutor. I couldn't load your profile right now, but you can still ask me anything. Pick a subject from the dropdown above to get started.",
+          },
+        ]);
+      } finally {
+        if (!cancelled) setSubjectsLoading(false);
       }
-    } catch (err) {
-      console.error("Subject fetch failed:", err);
-      setSubjects(DEFAULT_SUBJECTS);
-      setSubject(DEFAULT_SUBJECTS[0]);
-      setSubjectsFetchState("error");
-    } finally {
-      setSubjectsLoading(false);
     }
-  };
 
-  useEffect(() => { loadSubjects(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    loadProfile();
+    return () => { cancelled = true; };
+  }, [authReady, uid]);
 
   // ── Handle subject switch ───────────────────────────────────────────────────
   const handleSubjectChange = (newSubject: string) => {
     if (newSubject === subject) return;
     setSubject(newSubject);
-    setMessages((p) => [
-      ...p,
+    setMessages((prev) => [
+      ...prev,
       {
         role: "ai",
-        text: `Switched to ${newSubject}! 📚 What would you like to work on? I can explain concepts, solve problems step-by-step, or create practice questions.`,
+        text: `Switched to ${newSubject}! 📚 What would you like to work on? I can explain concepts, solve problems step-by-step, or create practice questions for you.`,
       },
     ]);
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  };
+
+  // ── Retry subjects ──────────────────────────────────────────────────────────
+  const retrySubjects = async () => {
+    if (!uid) return;
+    setSubjectsLoading(true);
+    setFetchState("idle");
+    try {
+      const fetched = await fetchSubjectsForUser(uid);
+      if (fetched.length > 0) {
+        setSubjects(fetched);
+        setSubject(fetched[0]);
+        setFetchState("loaded");
+      } else {
+        setFetchState("default");
+      }
+    } catch {
+      setFetchState("error");
+    } finally {
+      setSubjectsLoading(false);
+    }
   };
 
   // ── Send message ────────────────────────────────────────────────────────────
@@ -200,21 +259,21 @@ export default function TutorPage() {
 
     const userMsg = input.trim();
     setInput("");
-    setMessages((p) => [...p, { role: "user", text: userMsg }]);
+    setMessages((prev) => [...prev, { role: "user", text: userMsg }]);
     setSending(true);
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
 
     try {
       const history = messages
-        .slice(-10) // keep last 10 messages to avoid token overflow
+        .slice(-10)
         .map((m) => `${m.role === "user" ? "Student" : "Tutor"}: ${m.text}`)
         .join("\n");
 
       const prompt = [
-        `You are a friendly, encouraging AI tutor for a Nigerian secondary school student studying ${subject} for WAEC/JAMB.`,
-        `Be clear, use relatable examples, and break down complex topics step-by-step.`,
-        `Keep responses focused and under 200 words unless solving a multi-step problem.`,
-        `Use • for bullet points. Never use markdown headers.`,
+        `You are a friendly, encouraging AI tutor for a Nigerian secondary school student named ${firstName}, studying ${subject} for WAEC/JAMB.`,
+        `Be clear, use relatable Nigerian examples where helpful, and break down complex topics step-by-step.`,
+        `Keep responses focused and under 200 words unless solving a multi-step problem that requires more.`,
+        `Use • for bullet points. Never use markdown headers or asterisks for bold.`,
         ``,
         `Recent conversation:`,
         history,
@@ -224,10 +283,10 @@ export default function TutorPage() {
       ].join("\n");
 
       const text = await callGemini(prompt);
-      setMessages((p) => [...p, { role: "ai", text }]);
+      setMessages((prev) => [...prev, { role: "ai", text }]);
     } catch {
-      setMessages((p) => [
-        ...p,
+      setMessages((prev) => [
+        ...prev,
         { role: "ai", text: "Sorry, I couldn't connect right now. Please try again in a moment." },
       ]);
     } finally {
@@ -236,22 +295,38 @@ export default function TutorPage() {
     }
   };
 
-  // ── Status badge content ────────────────────────────────────────────────────
+  // ── Status badge ─────────────────────────────────────────────────────────────
   const statusBadge = () => {
     if (subjectsLoading) return null;
-    if (subjectsFetchState === "firebase") return (
+    if (fetchState === "loaded") return (
       <p className="text-xs text-teal-600 font-semibold flex items-center gap-1">
-        <BookOpen className="w-3 h-3" /> {subjects.length} enrolled subjects loaded
+        <BookOpen className="w-3 h-3" /> {subjects.length} subjects from your profile
       </p>
     );
-    if (subjectsFetchState === "error") return (
-      <button onClick={loadSubjects} className="text-xs text-amber-600 font-semibold flex items-center gap-1 hover:text-amber-700 transition-colors">
+    if (fetchState === "default") return (
+      <p className="text-xs text-slate-400 font-semibold">
+        Using default subjects —{" "}
+        <a href="/student/profile" className="text-orange-500 hover:underline font-black">add yours in Profile</a>
+      </p>
+    );
+    if (fetchState === "error") return (
+      <button onClick={retrySubjects} className="text-xs text-amber-600 font-semibold flex items-center gap-1 hover:text-amber-700 transition-colors">
         <RefreshCw className="w-3 h-3" /> Retry loading subjects
       </button>
     );
-    // "default" — silently show nothing extra, defaults are usable
     return null;
   };
+
+  // ── Auth loading gate ────────────────────────────────────────────────────────
+  // Show nothing while waiting for Firebase Auth to resolve
+  if (!authReady) {
+    return (
+      <div className="flex items-center justify-center py-24 gap-3 text-slate-400">
+        <Loader2 className="w-6 h-6 animate-spin" />
+        <span className="font-semibold text-sm">Loading your profile…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -265,7 +340,7 @@ export default function TutorPage() {
           </p>
         </div>
 
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="flex flex-col items-start sm:items-end gap-1.5">
           <SubjectDropdown
             value={subject}
             onChange={handleSubjectChange}
@@ -301,24 +376,28 @@ export default function TutorPage() {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 bg-amber-50/30">
 
-          {/* Loading shimmer while subjects load */}
+          {/* Skeleton while loading */}
           {subjectsLoading && (
-            <div className="flex gap-3">
-              <div className="w-8 h-8 rounded-xl bg-orange-200 animate-pulse shrink-0" />
-              <div className="flex-1 space-y-2 pt-1">
-                <div className="h-3.5 bg-slate-200 rounded-full animate-pulse w-3/4" />
-                <div className="h-3.5 bg-slate-100 rounded-full animate-pulse w-1/2" />
+            <div className="space-y-3">
+              <div className="flex gap-3">
+                <div className="w-8 h-8 rounded-xl bg-orange-200 animate-pulse shrink-0" />
+                <div className="flex-1 space-y-2 pt-1">
+                  <div className="h-3.5 bg-slate-200 rounded-full animate-pulse w-3/4" />
+                  <div className="h-3.5 bg-slate-100 rounded-full animate-pulse w-1/2" />
+                  <div className="h-3.5 bg-slate-100 rounded-full animate-pulse w-2/3" />
+                </div>
               </div>
             </div>
           )}
 
+          {/* Messages */}
           {!subjectsLoading && messages.map((m, i) => (
             <div key={i} className={`flex gap-3 ${m.role === "user" ? "flex-row-reverse" : ""}`}>
               <div
                 className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0
                   ${m.role === "ai" ? "bg-orange-500 text-white" : "bg-slate-700 text-white"}`}
               >
-                {m.role === "ai" ? "AI" : "A"}
+                {m.role === "ai" ? "AI" : firstName.charAt(0).toUpperCase()}
               </div>
               <div
                 className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed font-medium whitespace-pre-line
@@ -362,7 +441,7 @@ export default function TutorPage() {
             }}
             placeholder={
               subjectsLoading
-                ? "Loading your subjects…"
+                ? "Loading your profile…"
                 : `Ask about ${subject}… (Enter to send, Shift+Enter for new line)`
             }
             disabled={subjectsLoading}

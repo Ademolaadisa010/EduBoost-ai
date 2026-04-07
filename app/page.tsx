@@ -13,8 +13,8 @@ import {
   CheckCircle2,
   Star,
   TrendingUp,
-  // Instagram,
-  // Linkedin,
+  // Twitter, 
+  // LinkedIn,
   HelpCircle,
   Check,
   BookOpen,
@@ -93,13 +93,11 @@ const benefits = [
   "Learn collaboratively with classmates",
 ];
 
-/* ─── component ─────────────────────────────────────────────────── */
 export default function EduBoostPage() {
   const [activeFeature, setActiveFeature] = useState<number | null>(null);
 
   return (
     <>
-      {/* ── NAV ─────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 bg-amber-50/90 backdrop-blur-md border-b border-amber-200/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-18 py-4">
@@ -129,7 +127,7 @@ export default function EduBoostPage() {
 
             {/* Actions */}
             <div className="flex items-center gap-3">
-              <a href="/Login" className="hidden sm:block text-slate-600 hover:text-slate-900 font-semibold text-sm">
+              <a href="/sign-in" className="hidden sm:block text-slate-600 hover:text-slate-900 font-semibold text-sm">
                 Log in
               </a>
               <a
