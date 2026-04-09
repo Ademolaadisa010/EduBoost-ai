@@ -31,6 +31,11 @@ const NAV_ITEMS = [
   { href: "/student/profile",   icon: <Settings className="w-5 h-5" />,         label: "Profile & Settings" },
 ];
 
+// 👇 Add/remove routes here as you build them
+const COMING_SOON = new Set([
+  "/student/mentors",
+]);
+
 const PAGE_TITLES: Record<string, string> = {
   "/student/dashboard": "Dashboard",
   "/student/study":     "Study Assistant",
@@ -104,9 +109,9 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
     }
   };
 
-  const userInitials = profile ? initials(profile.fullName) : "…";
+  const userInitials  = profile ? initials(profile.fullName) : "…";
   const userFirstName = profile ? firstName(profile.fullName) : "…";
-  const classLabel = profile?.classLevel || "Set class in profile";
+  const classLabel    = profile?.classLevel || "Set class in profile";
 
   return (
     <div className="min-h-screen bg-amber-50 font-body antialiased flex">
@@ -154,6 +159,29 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map(({ href, icon, label }) => {
             const isActive = pathname === href;
+            const isSoon   = COMING_SOON.has(href);
+
+            if (isSoon) {
+              return (
+                <button
+                  key={href}
+                  onClick={() => toast("⚙️ Still building this — coming soon!", {
+                    style: { background: "#1e293b", color: "#fff", borderRadius: "14px", fontWeight: 600, fontSize: "14px" },
+                  })}
+                  className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-sm font-bold
+                    text-slate-500 opacity-50 blur-[0.5px] hover:blur-0 hover:opacity-75
+                    hover:bg-white/[0.05] transition-all cursor-pointer"
+                >
+                  {icon}
+                  {label}
+                  <span className="ml-auto text-[9px] font-black uppercase tracking-widest
+                    bg-slate-700 text-slate-400 px-1.5 py-0.5 rounded-full leading-4">
+                    Soon
+                  </span>
+                </button>
+              );
+            }
+
             return (
               <Link
                 key={href}

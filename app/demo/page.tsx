@@ -246,7 +246,7 @@ function SignupNudge({ onDismiss }: { onDismiss: () => void }) {
               Sign up free <ArrowRight className="w-3 h-3" />
             </Link>
             <Link
-              href="/Login"
+              href="/sign-in"
               className="inline-flex items-center gap-1.5 bg-white hover:bg-slate-50 text-slate-700 border-2 border-slate-200 px-4 py-2 rounded-xl text-xs font-black transition-colors"
             >
               Log in
@@ -284,7 +284,7 @@ function LockedFeatures() {
         ))}
       </div>
       <Link
-        href="/register"
+        href="/Register"
         className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white py-3 text-sm font-black transition-all"
       >
         Create free account <ArrowRight className="w-3.5 h-3.5" />
@@ -397,7 +397,7 @@ export default function DemoPage() {
 
             <div className="flex items-center gap-2">
               <Link
-                href="/Login"
+                href="/sign-in"
                 className="hidden sm:inline-flex items-center gap-1.5 text-slate-600 hover:text-orange-500 text-sm font-black transition-colors border-2 border-slate-200 hover:border-orange-300 px-4 py-2 rounded-xl bg-white"
               >
                 Log in
@@ -697,7 +697,7 @@ export default function DemoPage() {
                       <Link href="/Register" className="inline-flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white px-5 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-orange-900/30 hover:-translate-y-0.5">
                         Create free account <ArrowRight className="w-3.5 h-3.5" />
                       </Link>
-                      <Link href="/Login" className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded-xl text-sm font-black transition-colors">
+                      <Link href="/sign-in" className="inline-flex items-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded-xl text-sm font-black transition-colors">
                         Log in
                       </Link>
                     </div>
