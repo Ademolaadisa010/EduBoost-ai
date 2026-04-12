@@ -276,7 +276,7 @@ export default function StudyPage() {
 
       <div>
         <h2 className="font-display font-black text-slate-900 text-2xl mb-1">Study Assistant</h2>
-        <p className="text-slate-500 text-sm font-medium">Upload a file or paste your notes — Gemini AI does the rest.</p>
+        <p className="text-slate-500 text-sm font-medium">Upload a file or paste your notes — EduBoost AI does the rest.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
@@ -314,7 +314,7 @@ export default function StudyPage() {
                 <div className="flex-1 min-w-0">
                   <p className="text-slate-800 text-sm font-black truncate">{uploadedFile.fileName}</p>
                   <p className="text-slate-400 text-xs font-semibold">
-                    {formatFileSize(uploadedFile.fileSize)} · {ACCEPTED_TYPES[uploadedFile.fileType]} · Ready for Gemini ✓
+                    {formatFileSize(uploadedFile.fileSize)} · {ACCEPTED_TYPES[uploadedFile.fileType]} · Ready for EduBoost ✓
                   </p>
                 </div>
                 <button onClick={() => { setUploadedFile(null); clearAll(); }} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
@@ -323,7 +323,7 @@ export default function StudyPage() {
               </div>
               <div className="mt-3 bg-teal-50 border border-teal-200 rounded-xl px-3 py-2 flex items-center gap-2">
                 <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                <p className="text-teal-700 text-xs font-bold">File sent to Gemini — choose an action below</p>
+                <p className="text-teal-700 text-xs font-bold">File sent to EduBoost AI — choose an action below</p>
               </div>
               <button onClick={() => fileInputRef.current?.click()} className="mt-2 w-full text-xs font-bold text-slate-400 hover:text-orange-500 transition-colors">
                 Upload different file
@@ -412,7 +412,7 @@ export default function StudyPage() {
               </p>
               <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400 font-semibold">
                 <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
-                Powered by Gemini 2.5 Flash
+                Powered by EduBoost AI 2.5 Flash
               </div>
             </div>
           )}
@@ -424,7 +424,7 @@ export default function StudyPage() {
                   <Sparkles className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <p className="font-display font-bold text-slate-900 text-sm">Gemini is thinking…</p>
+                  <p className="font-display font-bold text-slate-900 text-sm">EduBoost is thinking…</p>
                   <p className="text-xs text-slate-400 font-medium">Usually 5–15 seconds</p>
                 </div>
               </div>
@@ -497,7 +497,7 @@ export default function StudyPage() {
                 </div>
                 <div className="bg-amber-50 border-2 border-amber-200 rounded-xl px-4 py-2.5 flex items-start gap-2">
                   <Lightbulb className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                  <p className="text-amber-700 text-xs font-medium">Answer in your own words, then click &quot;Check&quot; for Gemini grading.</p>
+                  <p className="text-amber-700 text-xs font-medium">Answer in your own words, then click &quot;Check&quot; for EduBoost grading.</p>
                 </div>
               </div>
 

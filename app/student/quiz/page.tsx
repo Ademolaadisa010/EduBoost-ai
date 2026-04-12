@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowRight, RotateCcw, Sparkles, BookOpen, ChevronDown } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 
 type Difficulty = "easy" | "normal" | "hard";
@@ -31,7 +31,9 @@ async function generateQuestions(
   difficulty: Difficulty,
   topic: string
 ): Promise<Question[]> {
-  const topicLine = topic.trim() ? `Topic/focus area: ${topic.trim()}` : "Cover a broad range of topics within the subject.";
+  const topicLine = topic.trim()
+    ? `Topic/focus area: ${topic.trim()}`
+    : "Cover a broad range of topics within the subject.";
   const difficultyGuide = {
     easy:   "Simple recall and basic understanding. Suitable for beginners.",
     normal: "Moderate application and comprehension. WAEC standard.",
@@ -45,22 +47,26 @@ Generate exactly 5 multiple-choice questions for:
 - Difficulty: ${difficulty} — ${difficultyGuide}
 - ${topicLine}
 
-Return ONLY valid JSON (no markdown, no explanation) in this exact format:
+Return ONLY a raw JSON array. No markdown, no code fences, no explanation, no preamble.
+Start your response with [ and end with ].
+
+Format:
 [
   {
-    "q": "question text",
-    "options": ["A", "B", "C", "D"],
+    "q": "question text here",
+    "options": ["option A", "option B", "option C", "option D"],
     "correct": 0,
-    "explain": "brief explanation of the correct answer"
+    "explain": "brief explanation"
   }
 ]
 
 Rules:
-- "correct" is the 0-based index of the correct option
+- "correct" is the 0-based index of the correct option (0, 1, 2, or 3)
 - All 4 options must be plausible
 - Explanations must be concise (1-2 sentences)
 - For maths/chemistry include working in the explanation
-- Questions must match the difficulty level strictly`;
+- Questions must match the difficulty level strictly
+- Return exactly 5 questions`;
 
   const res = await fetch("/api/gemini", {
     method: "POST",
@@ -68,17 +74,57 @@ Rules:
     body: JSON.stringify({ prompt }),
   });
 
-  if (!res.ok) throw new Error("API error");
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[quiz] API error:", res.status, errText);
+    throw new Error(`API error ${res.status}`);
+  }
+
   const data = await res.json();
-  const text = data.content?.[0]?.text ?? "";
+  console.log("[quiz] raw response:", data);
 
-  // Strip any accidental markdown fences
-  const clean = text.replace(/```json|```/g, "").trim();
-  const parsed = JSON.parse(clean);
+  // Extract text from response — handle different response shapes
+  const text: string =
+    data.content?.[0]?.text ??
+    data.text ??
+    data.candidates?.[0]?.content?.parts?.[0]?.text ??
+    "";
 
-  return parsed.map((item: Omit<Question, "subject">) => ({
-    ...item,
+  if (!text) {
+    console.error("[quiz] empty text in response:", data);
+    throw new Error("Empty response from AI");
+  }
+
+  // Extract JSON array — find first [ to last ]
+  const start = text.indexOf("[");
+  const end   = text.lastIndexOf("]");
+
+  if (start === -1 || end === -1 || end <= start) {
+    console.error("[quiz] no JSON array found in:", text);
+    throw new Error("No JSON array in response");
+  }
+
+  const jsonStr = text.slice(start, end + 1);
+
+  let parsed: Array<{ q: string; options: string[]; correct: number; explain: string }>;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e) {
+    console.error("[quiz] JSON parse failed:", jsonStr, e);
+    throw new Error("Failed to parse questions JSON");
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    console.error("[quiz] parsed is not a valid array:", parsed);
+    throw new Error("Invalid questions format");
+  }
+
+  return parsed.map((item) => ({
     subject,
+    q:       item.q       ?? "Question unavailable",
+    options: item.options ?? [],
+    correct: item.correct ?? 0,
+    explain: item.explain ?? "",
   }));
 }
 
@@ -89,13 +135,15 @@ const DIFFICULTY_CONFIG: Record<Difficulty, { label: string; color: string; bg: 
 };
 
 export default function QuizPage() {
-  // ── Auth / profile ──────────────────────────────────────────────────────────
-  const [userSubjects, setUserSubjects] = useState<string[]>([]);
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  const [uid,            setUid]            = useState<string | null>(null);
+  const [userSubjects,   setUserSubjects]   = useState<string[]>([]);
   const [profileLoading, setProfileLoading] = useState(true);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!user) { setProfileLoading(false); return; }
+      setUid(user.uid);
       try {
         const snap = await getDoc(doc(db, "users", user.uid));
         if (snap.exists()) {
@@ -104,7 +152,7 @@ export default function QuizPage() {
             setUserSubjects(data.subjects);
           }
         }
-      } catch { /* silently fall back */ }
+      } catch { /* fall back silently */ }
       finally { setProfileLoading(false); }
     });
     return () => unsub();
@@ -115,61 +163,99 @@ export default function QuizPage() {
   const [topic,      setTopic]      = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>("normal");
 
-  // Set default subject once subjects load
   useEffect(() => {
     if (userSubjects.length > 0 && !subject) setSubject(userSubjects[0]);
   }, [userSubjects]);
 
   // ── Quiz state ──────────────────────────────────────────────────────────────
-  const [phase,    setPhase]    = useState<Phase>("setup");
+  const [phase,     setPhase]     = useState<Phase>("setup");
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [genError, setGenError] = useState("");
-  const [current,  setCurrent]  = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  const [answered, setAnswered] = useState(false);
-  const [score,    setScore]    = useState(0);
+  const [genError,  setGenError]  = useState("");
+  const [current,   setCurrent]   = useState(0);
+  const [selected,  setSelected]  = useState<number | null>(null);
+  const [answered,  setAnswered]  = useState(false);
+  const [score,     setScore]     = useState(0);
+  const [saving,    setSaving]    = useState(false);
+
+  // Track start time for duration calculation
+  const quizStartRef = useRef<number>(0);
 
   const q = questions[current];
 
   // ── Start quiz ──────────────────────────────────────────────────────────────
-  const startQuiz = async () => {
-    if (!subject) return;
-    setPhase("loading");
-    setGenError("");
+ const startQuiz = async () => {
+  if (!subject) return;
+  setPhase("loading");
+  setGenError("");
+  try {
+    const qs = await generateQuestions(subject, difficulty, topic);
+    setQuestions(qs);
+    setCurrent(0); setSelected(null); setAnswered(false); setScore(0);
+    quizStartRef.current = Date.now();
+    setPhase("quiz");
+  } catch (e) {
+    console.error("[quiz] startQuiz error:", e);
+    setGenError(e instanceof Error ? e.message : "Failed to generate questions. Please try again.");
+    setPhase("setup");
+  }
+};
+
+  // ── Save session to Firestore ───────────────────────────────────────────────
+  const saveSession = async (finalScore: number) => {
+    if (!uid) return;
+    setSaving(true);
     try {
-      const qs = await generateQuestions(subject, difficulty, topic);
-      setQuestions(qs);
-      setCurrent(0); setSelected(null); setAnswered(false); setScore(0);
-      setPhase("quiz");
-    } catch {
-      setGenError("Failed to generate questions. Please try again.");
-      setPhase("setup");
+      const durationMs  = Date.now() - quizStartRef.current;
+      const durationMin = Math.max(1, Math.round(durationMs / 60000));
+
+      await addDoc(collection(db, "users", uid, "quizSessions"), {
+        subject,
+        topic:      topic.trim() || null,
+        difficulty,
+        score:      finalScore,
+        total:      questions.length,
+        pct:        Math.round((finalScore / questions.length) * 100),
+        durationMinutes: durationMin,
+        completedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error("[quiz] save session failed:", e);
+    } finally {
+      setSaving(false);
     }
   };
 
   // ── Quiz actions ─────────────────────────────────────────────────────────────
-  const handleSelect  = (i: number) => { if (answered) return; setSelected(i); };
-  const handleCheck   = () => {
+  const handleSelect = (i: number) => { if (answered) return; setSelected(i); };
+
+  const handleCheck = () => {
     if (selected === null) return;
     setAnswered(true);
     if (selected === q.correct) setScore((p) => p + 1);
   };
-  const handleNext    = () => {
-    if (current < questions.length - 1) {
+
+  const handleNext = () => {
+    const isLast = current >= questions.length - 1;
+    if (!isLast) {
       setCurrent((p) => p + 1); setSelected(null); setAnswered(false);
     } else {
+      // Calculate final score including this question
+      const finalScore = score + (selected === q.correct ? 0 : 0); // score already updated in handleCheck
+      saveSession(score);
       setPhase("done");
     }
   };
+
   const handleRestart = () => {
     setPhase("setup"); setQuestions([]); setGenError("");
     setCurrent(0); setSelected(null); setAnswered(false); setScore(0);
   };
-  const handleRetry   = () => startQuiz();
+
+  const handleRetry = () => startQuiz();
 
   const dc = DIFFICULTY_CONFIG[difficulty];
 
-  // ── Setup screen ─────────────────────────────────────────────────────────────
+  // ── Setup / Loading screen ───────────────────────────────────────────────────
   if (phase === "setup" || phase === "loading") {
     return (
       <div className="space-y-5">
@@ -185,7 +271,6 @@ export default function QuizPage() {
             <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">
               <BookOpen className="w-3.5 h-3.5 inline mr-1.5" />Subject
             </label>
-
             {profileLoading ? (
               <div className="flex items-center gap-2 text-slate-400 text-sm font-semibold py-2">
                 <Spinner /> Loading your subjects…
@@ -230,7 +315,7 @@ export default function QuizPage() {
             <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-3">Difficulty</label>
             <div className="grid grid-cols-3 gap-2">
               {(["easy", "normal", "hard"] as Difficulty[]).map((d) => {
-                const cfg = DIFFICULTY_CONFIG[d];
+                const cfg    = DIFFICULTY_CONFIG[d];
                 const active = difficulty === d;
                 return (
                   <button
@@ -247,14 +332,12 @@ export default function QuizPage() {
             </div>
           </div>
 
-          {/* Error */}
           {genError && (
             <div className="bg-red-50 border-2 border-red-200 rounded-xl px-4 py-3 text-sm text-red-600 font-medium">
               {genError}
             </div>
           )}
 
-          {/* Start button */}
           <button
             onClick={startQuiz}
             disabled={!subject || phase === "loading"}
@@ -268,7 +351,7 @@ export default function QuizPage() {
 
           {phase === "loading" && (
             <p className="text-center text-xs text-slate-400 font-semibold animate-pulse">
-              Gemini AI is crafting your {difficulty} {subject} questions…
+              EduBoost AI is crafting your {difficulty} {subject} questions…
             </p>
           )}
         </div>
@@ -293,12 +376,26 @@ export default function QuizPage() {
           <p className="text-orange-500 font-bold uppercase tracking-widest text-xs mb-2">Quiz Complete</p>
           <h3 className="font-display font-black text-slate-900 text-4xl mb-2">{score} / {questions.length}</h3>
           <p className="text-slate-500 font-medium text-sm mb-1">{pct}% score</p>
-          <div className="flex items-center justify-center gap-2 mb-6">
+          <div className="flex items-center justify-center gap-2 mb-6 flex-wrap">
             <span className={`text-xs font-black px-2.5 py-1 rounded-full ${dc.bg} ${dc.color}`}>{dc.label}</span>
             <span className="text-xs font-semibold text-slate-400">{subject}{topic ? ` · ${topic}` : ""}</span>
+            {saving && (
+              <span className="flex items-center gap-1 text-xs text-slate-400 font-semibold">
+                <Spinner className="w-3 h-3" /> Saving…
+              </span>
+            )}
+            {!saving && (
+              <span className="text-xs text-teal-600 font-black bg-teal-50 px-2 py-0.5 rounded-full">
+                ✓ Saved to dashboard
+              </span>
+            )}
           </div>
           <p className="text-slate-400 text-sm mb-8">
-            {score === questions.length ? "Perfect score! Outstanding work." : pct >= 60 ? "Good effort — review the ones you missed." : "Keep practising — you'll improve!"}
+            {score === questions.length
+              ? "Perfect score! Outstanding work."
+              : pct >= 60
+              ? "Good effort — review the ones you missed."
+              : "Keep practising — you'll improve!"}
           </p>
           <div className="flex gap-3 justify-center flex-wrap">
             <button onClick={handleRetry}
@@ -379,7 +476,6 @@ export default function QuizPage() {
             })}
           </div>
 
-          {/* Explanation */}
           {answered && (
             <div className={`border-2 rounded-xl px-4 py-3 mb-5 ${isCorrect ? "border-teal-300 bg-teal-50" : "border-amber-300 bg-amber-50"}`}>
               <p className={`font-black text-sm mb-1 ${isCorrect ? "text-teal-700" : "text-amber-700"}`}>

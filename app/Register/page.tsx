@@ -13,7 +13,7 @@ import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 
 type Role = "student" | "mentor";
-
+const COMING_SOON_ROLES = new Set<Role>(["mentor"]);
 export default function RegisterPage() {
   const router = useRouter();
   const [role, setRole] = useState<Role>("student");
@@ -248,23 +248,42 @@ export default function RegisterPage() {
 
             {/* Role toggle */}
             <div className="grid grid-cols-2 gap-3 mb-6">
-              {(["student", "mentor"] as Role[]).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setRole(r)}
-                  disabled={loading}
-                  className={`rounded-2xl border-2 py-3 text-sm font-bold transition-all ${
-                    role === r
-                      ? r === "student"
-                        ? "border-orange-400 bg-orange-50 text-orange-600 shadow-md shadow-orange-100"
-                        : "border-teal-400 bg-teal-50 text-teal-700 shadow-md shadow-teal-100"
-                      : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                  }`}
-                >
-                  {r === "student" ? "Student / Learner" : "Mentor / Tutor"}
-                </button>
-              ))}
+              {(["student", "mentor"] as Role[]).map((r) => {
+                const isSoon = COMING_SOON_ROLES.has(r);
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => {
+                      if (isSoon) {
+                        toast("⚙️ Mentor registration coming soon!", {
+                          style: { background: "#1e293b", color: "#fff", borderRadius: "14px", fontWeight: 600, fontSize: "14px" },
+                        });
+                        return;
+                      }
+                      setRole(r);
+                    }}
+                    disabled={loading}
+                    className={`rounded-2xl border-2 py-3 text-sm font-bold transition-all relative
+                      ${isSoon
+                        ? "border-slate-200 bg-white text-slate-400 opacity-50 blur-[0.4px] hover:blur-0 hover:opacity-70 cursor-pointer"
+                        : role === r
+                          ? r === "student"
+                            ? "border-orange-400 bg-orange-50 text-orange-600 shadow-md shadow-orange-100"
+                            : "border-teal-400 bg-teal-50 text-teal-700 shadow-md shadow-teal-100"
+                          : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                      }`}
+                  >
+                    {r === "student" ? "Student / Learner" : "Mentor / Tutor"}
+                    {isSoon && (
+                      <span className="ml-2 text-[9px] font-black uppercase tracking-widest
+                        bg-slate-200 text-slate-500 px-1.5 py-0.5 rounded-full">
+                        Soon
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Form */}

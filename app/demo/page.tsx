@@ -554,7 +554,7 @@ export default function DemoPage() {
                   ))}
                 </div>
                 <div className="mt-5 pt-4 border-t-2 border-dashed border-slate-200 text-center">
-                  <p className="text-xs text-slate-400 font-semibold">No login required · Your notes are never stored · Powered by Gemini AI</p>
+                  <p className="text-xs text-slate-400 font-semibold">No login required · Your notes are never stored · Powered by EduBoost AI</p>
                 </div>
               </div>
             )}

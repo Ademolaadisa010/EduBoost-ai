@@ -236,7 +236,7 @@ export default function LoginPage() {
             <p className="text-slate-300 text-sm italic font-medium leading-relaxed">
               &quot;EduBoost AI cut my study time in half and my grades shot up. The quiz generator before exams is a lifesaver!&quot;
             </p>
-            <p className="mt-2 text-xs font-black text-white">Sarah J. — University Student</p>
+            <p className="mt-2 text-xs font-black text-white">Brilliant. — University Student</p>
           </div>
         </div>
 
